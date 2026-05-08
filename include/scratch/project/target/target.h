@@ -1,11 +1,11 @@
 #pragma once
 
-#include "../asset/asset.h"
-#include "../block/block.h"
-#include "../comment/comment.h"
-#include "../broadcast/broadcast.h"
-#include "../list/list.h"
-#include "../variable/variable.h"
+#include "./asset/asset.h"
+#include "./block/block.h"
+#include "./comment/comment.h"
+#include "./broadcast/broadcast.h"
+#include "./list/list.h"
+#include "./variable/variable.h"
 
 #include <stddef.h>
 #include <stdint.h>
