@@ -3,7 +3,6 @@ include(GenerateExportHeader)
 cmake_minimum_required(VERSION 3.13..4.3)
 
 set(CMAKE_C_STANDARD 17)
-set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(
@@ -64,13 +63,22 @@ target_compile_options(ScratchParser PRIVATE
 # Ensure compatibility with C++.
     -Werror=c++-compat
     -Werror=vla
-    -Werror=strict-prototypes
+    -Wstrict-prototypes
     -Werror=missing-prototypes
 )
 
+if (BUILD_SHARED_LIBS)
+    add_compile_options(-fPIC)
+endif()
+
 # Configure submodules
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
+
 include(JSON-C)
+include(libzip)
+include(cwalk)
+include(OpenSSL)
 
 # Configure tests
 
