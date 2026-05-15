@@ -1,11 +1,13 @@
+
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <scratch/parse.h>
 #include <cwalk.h>
-#include <stdint.h>
 #include <zip.h>
 #include <zlib.h>
 
+#include <stdint.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -48,7 +50,7 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
         cwk_path_get_extension(file_path, (const char**)&extension_buffer, &buffer_length);
 
         if (strncmp((const char*)extension_buffer, ".sb3", buffer_length) != 0) {
-            fprintf(stderr, "Path is not a valid .sb3 file: '%s'", file_path);
+            fprintf(stderr, "Path is not a valid .sb3 file: '%s'\n", file_path);
             return false;
         }
 
@@ -74,12 +76,15 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
 
         project_file = fopen(file_path, "rb");
         if (!project_file) {
-            fprintf(stderr, "Cannot open file: '%s'", file_path);
+            fprintf(stderr, "Cannot open file: '%s': %s\n", file_path, strerror(errno));
             return false;
         }
         while ((bytes_read = fread(file_buffer, sizeof(*file_buffer), sizeof(file_buffer), project_file)) != 0) {
-            // TODO - check if fread caused an error before exiting
             EVP_DigestUpdate(ctx, file_buffer, bytes_read);
+        }
+        if (ferror(project_file) != 0) {
+            fprintf(stderr, "Failed while reading file: '%s': %s\n", file_path, strerror(errno));
+            return false;
         }
         EVP_DigestFinal_ex(ctx, (unsigned char*)hash_buffer, &hash_length);
 
@@ -141,19 +146,18 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
             size_t entries;
             zip_error_t zip_error;
 
-            #define __SCRATCH_ZIP_HANDLE_ERROR(condition) \
-                if (condition) { \
-                    zip_error_init_with_code(&zip_error, err_code); \
-                    if (project_archive) zip_close(project_archive); \
-                    fprintf(stderr, "Encountered LibZip error: %s\n", zip_error_strerror(&zip_error)); \
-                    return false; \
-                }
-
             project_archive = zip_open(file_path, ZIP_RDONLY, &err_code);
-            __SCRATCH_ZIP_HANDLE_ERROR(err_code != 0);
+            if (err_code != 0) {
+                zip_error_init_with_code(&zip_error, err_code);
+                fprintf(stderr, "Cannot open file: '%s': %s\n", file_path, zip_error_strerror(&zip_error));
+                return false;
+            }
 
             entries = (size_t)zip_get_num_entries(project_archive, 0);
-            __SCRATCH_ZIP_HANDLE_ERROR(entries < 0);
+            if (entries < 0) {
+                fprintf(stderr, "Cannot count archive entries: '%s'\n", file_path);
+                return false;
+            }
 
             zip_stat_t archived_file_stat;
             zip_file_t* archived_file;
@@ -162,10 +166,17 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
 
             for (i = 0; i < entries; i++) {
                 archived_file = zip_fopen_index(project_archive, i, 0);
-                __SCRATCH_ZIP_HANDLE_ERROR(!archived_file)
+                if (!archived_file) {
+                    fprintf(stderr, "Cannot open archive index: '%zu'\n", i);
+                    return false;
+                }
 
                 err_code = zip_stat_index(project_archive, i, 0, &archived_file_stat);
-                __SCRATCH_ZIP_HANDLE_ERROR(err_code != 0)
+                if (err_code != 0) {
+                    zip_error_init_with_code(&zip_error, err_code);
+                    fprintf(stderr, "Cannot stat archived index: '%zu': %s\n", i, zip_error_strerror(&zip_error));
+                    return false;
+                }
 
                 cwk_path_join(
                     project_dir, archived_file_stat.name,
@@ -173,24 +184,26 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
                 );
                 extracted_file = fopen(extracted_file_name, "wb");
                 if (!extracted_file) {
-                    fprintf(stderr, "Could not open file: '%s'\n", extracted_file_name);
+                    fprintf(stderr, "Cannot open file: '%s': %s\n", extracted_file_name, strerror(errno));
                     return false;
                 }
 
                 file_crc = crc32(0, Z_NULL, 0);
 
-                while ((bytes_read = zip_fread(archived_file, extracted_file_buffer, sizeof(extracted_file_buffer))) != 0) {
-                    __SCRATCH_ZIP_HANDLE_ERROR(bytes_read == -1)
-
+                while ((bytes_read = zip_fread(archived_file, extracted_file_buffer, sizeof(extracted_file_buffer))) > 0) {
                     fwrite(extracted_file_buffer, sizeof(*extracted_file_buffer), (size_t)bytes_read, extracted_file);
                     file_crc = crc32(file_crc, (const Bytef*)extracted_file_buffer, (uInt)bytes_read);
+                }
+                if (bytes_read == -1) {
+                    fprintf(stderr, "Failed while reading archived file: '%s'\n", archived_file_stat.name);
+                    return false;
                 }
 
                 if (
                     archived_file_stat.valid & ZIP_STAT_CRC &&
                     archived_file_stat.crc != file_crc
                 ) {
-                    fprintf(stderr, "Could not validate file checksum: %zu != %u for '%s'\n", file_crc, archived_file_stat.crc, archived_file_stat.name);
+                    fprintf(stderr, "Cannot validate file checksum: '%s': %zu != %u\n", archived_file_stat.name, file_crc, archived_file_stat.crc);
                     return false;
                 }
 
