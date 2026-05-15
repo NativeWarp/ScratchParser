@@ -104,7 +104,6 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
         #undef hash_buffer
         #undef project_file
     }
-    printf("[DEBUG] project_hash_str = '%s'\n", project_hash_str);
 
     char project_dir[FILENAME_MAX];
     char project_lock[FILENAME_MAX];
@@ -129,8 +128,6 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
 
         #undef cache_dir
     }
-    printf("[DEBUG] project_dir = '%s'\n", project_dir);
-    printf("[DEBUG] project_lock = '%s'\n", project_lock);
 
     {
         #define i temp_counter
