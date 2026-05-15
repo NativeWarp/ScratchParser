@@ -1,6 +1,6 @@
 include(CPM)
 
-find_package(ZLIB 1.3.2)
+find_package(ZLIB 1.2.4.1)
 if (NOT ZLIB_FOUND)
     CPMAddPackage(
         NAME zlib

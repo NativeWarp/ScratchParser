@@ -1,6 +1,6 @@
 include(CPM)
 
-find_package(OpenSSL 3.6.0)
+find_package(OpenSSL 3.0.0)
 if (NOT OpenSSL_FOUND)
     if (ANDROID)
         set(OpenSSL_CROSS "CROSS ON")
@@ -13,11 +13,11 @@ if (NOT OpenSSL_FOUND)
 
     CPMAddPackage(
         NAME OpenSSL
-        VERSION 3.6.0
+        VERSION 3.6.1
         GIT_REPOSITORY https://github.com/viaduck/openssl-cmake.git
         GIT_TAG 7e0c2c4
         OPTIONS
-            "OPENSSL_BUILD_VERSION 3.6.0"
+            "OPENSSL_BUILD_VERSION 3.6.1"
             "${OpenSSL_CROSS}"
             "${OpenSSL_CROSS_TARGET}"
             "${OpenSSL_CROSS_ANDROID}"
