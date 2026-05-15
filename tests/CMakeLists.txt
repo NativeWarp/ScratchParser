@@ -6,6 +6,11 @@ macro(add_test name)
     )
 
     target_link_libraries("tests_${name}" PUBLIC ScratchParser)
+    add_custom_command(TARGET "tests_${name}" POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+            "$<TARGET_FILE_DIR:tests_${name}>/resources"
+    )
 endmacro()
 
 add_test(parse)
