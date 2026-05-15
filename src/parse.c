@@ -138,8 +138,10 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
         #define extracted_file temp_file
         #define extracted_file_buffer temp_buffer
 
-        if (!__scratch_exists(project_lock)) {
-            printf("Project not cached!\n");
+        if (__scratch_exists(project_lock)) {
+            printf("Project cache found: '%s'\n", project_dir);
+        } else {
+            printf("Project not cached\n");
 
             zip_t* project_archive;
             int err_code;
