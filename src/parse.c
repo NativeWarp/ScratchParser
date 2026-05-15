@@ -44,17 +44,17 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
     size_t temp_counter;
 
     {
-        #define extension_buffer temp_buffer
         #define buffer_length temp_counter
 
-        cwk_path_get_extension(file_path, (const char**)&extension_buffer, &buffer_length);
+        const char* extension_buffer;
 
-        if (strncmp((const char*)extension_buffer, ".sb3", buffer_length) != 0) {
+        cwk_path_get_extension(file_path, &extension_buffer, &buffer_length);
+
+        if (strncmp(extension_buffer, ".sb3", buffer_length) != 0) {
             fprintf(stderr, "Path is not a valid .sb3 file: '%s'\n", file_path);
             return false;
         }
 
-        #undef extension_buffer
         #undef buffer_length
     }
 
