@@ -1,6 +1,6 @@
 include(CPM)
 
-find_package(LIBZIP)
+find_package(LIBZIP 1.11.4)
 if (NOT LIBZIP_FOUND)
     CPMAddPackage(
         NAME libzip

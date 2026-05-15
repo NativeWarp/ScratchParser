@@ -1,7 +1,6 @@
 include(CPM)
 
-
-find_package(JSONC)
+find_package(JSONC 0.18)
 if (NOT JSONC_FOUND)
     CPMAddPackage(
         NAME JSON-C

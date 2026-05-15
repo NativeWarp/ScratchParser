@@ -1,3 +1,4 @@
+#include <scratchparser_export.h>
 #include "./project/project.h"
 
 /**
@@ -8,4 +9,4 @@
  * 
  * @return bool Whether the project successfully loaded
  */
-bool scratch_project_load(const char* file_path, size_t* identifier);
+bool SCRATCHPARSER_EXPORT scratch_project_load(const char* file_path, size_t* identifier);

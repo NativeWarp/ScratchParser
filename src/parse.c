@@ -3,6 +3,7 @@
 #include <scratch/parse.h>
 #include <cwalk.h>
 #include <zip.h>
+#include <zlib.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
     #define __scratch_mkdir(dir) mkdir(dir, 0755)
     #define __scratch_exists(path) (stat(path, &_sb) == 0)
     #define __scratch_isdir(path) (stat(path, &_sb) == 0 && S_ISDIR(_sb.st_mode))
+    #define __scratch_rmdir(dir) rmdir(dir)
 #elif defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
     #include <windows.h>
@@ -28,87 +30,89 @@
     #define __scratch_mkdir(dir) CreateDirectory(dir, NULL)
     #define __scratch_exists(path) (GetFileAttributes(dir) != INVALID_FILE_ATTRIBUTES)
     #define __scratch_isdir(path) (GetFileAttributes(dir) & FILE_ATTRIBUTE_DIRECTORY)
+    #define __scratch_rmdir(dir) RemoveDirectory(dir)
 #else
     #error "Unable to determine system."
 #endif
 
-
 bool scratch_project_load(const char* file_path, size_t* identifier) {
+    char temp_buffer[1 << 16];
+    FILE* temp_file;
+
     {
         const char* extension;
-        size_t length;
+        size_t length = 0;
         cwk_path_get_extension(file_path, &extension, &length);
 
         if (strncmp(extension, ".sb3", length) != 0) {
+            fprintf(stderr, "Path is not a valid .sb3 file: '%s'", file_path);
             return false;
         }
     }
 
-    size_t project_hash;
     char project_hash_str[FILENAME_MAX];
     {
         EVP_MD_CTX* ctx;
         const EVP_MD* sha256;
-        char input_buffer[255];
-        char temp_hash[FILENAME_MAX];
         unsigned int hash_length;
-        int hash_max_length;
-        FILE* project_file;
         size_t bytes_read;
 
         ctx = EVP_MD_CTX_new();
         sha256 = EVP_sha1();
         EVP_DigestInit_ex(ctx, sha256, NULL);
 
-        project_file = fopen(file_path, "rb");
-        if (!project_file) return false;
-        while ((bytes_read = fread(input_buffer, sizeof(*input_buffer), sizeof(input_buffer), project_file)) != 0) {
-            EVP_DigestUpdate(ctx, input_buffer, bytes_read);
+        temp_file = fopen(file_path, "rb");
+        if (!temp_file) {
+            fprintf(stderr, "Cannot open file: '%s'", file_path);
+            return false;
         }
 
-        EVP_DigestFinal_ex(ctx, (unsigned char*)temp_hash, &hash_length);
-        hash_max_length = hash_length > sizeof(project_hash) ? sizeof(project_hash) : (int)hash_length;
+        while ((bytes_read = fread(temp_buffer, sizeof(*temp_buffer), sizeof(temp_buffer), temp_file)) != 0) {
+            EVP_DigestUpdate(ctx, temp_buffer, bytes_read);
+        }
+        EVP_DigestFinal_ex(ctx, (unsigned char*)temp_buffer, &hash_length);
 
-        memcpy(&project_hash, temp_hash, (size_t)hash_max_length);
-        for (int i = 0; i < hash_max_length; i++) {
-            sprintf(project_hash_str + (i * 2), "%02x", (unsigned char)temp_hash[i]);
+        memcpy(identifier, temp_buffer, sizeof(*identifier));
+        for (size_t i = 0; i < sizeof(*identifier); i++) {
+            sprintf(project_hash_str + (i * 2), "%02x", (unsigned char)temp_buffer[i]);
         }
 
         EVP_MD_free((EVP_MD*)sha256);
         EVP_MD_CTX_free(ctx);
-        fclose(project_file);
+
+        fclose(temp_file);
     }
+    printf("[DEBUG] project_hash_str = '%s'\n", project_hash_str);
 
     char project_dir[FILENAME_MAX];
+    char project_lock[FILENAME_MAX];
     {
-        char cache_dir[FILENAME_MAX];
-
         cwk_path_join(
             __scratch_homedir(), ".scratch",
-            cache_dir, sizeof(cache_dir)
+            temp_buffer, sizeof(temp_buffer)
         );
-        if (!__scratch_exists(cache_dir) || !__scratch_isdir(cache_dir)) {
-            __scratch_mkdir(cache_dir);
+        if (!__scratch_exists(temp_buffer) || !__scratch_isdir(temp_buffer)) {
+            __scratch_mkdir(temp_buffer);
         }
 
         cwk_path_join(
-            cache_dir, project_hash_str,
+            temp_buffer, project_hash_str,
             project_dir, sizeof(project_dir)
         );
         if (!__scratch_exists(project_dir) || !__scratch_isdir(project_dir)) {
             __scratch_mkdir(project_dir);
         }
+
+        cwk_path_join(
+            project_dir, "success.lock",
+            project_lock, sizeof(project_lock)
+        );
     }
+    printf("[DEBUG] project_dir = '%s'\n", project_dir);
+    printf("[DEBUG] project_lock = '%s'\n", project_lock);
 
     {
-
-        char project_json[FILENAME_MAX];
-        cwk_path_join(
-            project_dir, "project.json",
-            project_json, sizeof(project_json)
-        );
-        
-        if (/* !__scratch_exists(project_json) */ 1) {
+        if (!__scratch_exists(project_lock)) {
             printf("Project not cached!\n");
 
             zip_t* project_archive;
@@ -119,8 +123,8 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
             #define __SCRATCH_ZIP_HANDLE_ERROR(condition) \
                 if (condition) { \
                     zip_error_init_with_code(&zip_error, err_code); \
-                    fprintf(stderr, "Cannot open project file: %s\n", zip_error_strerror(&zip_error)); \
                     if (project_archive) zip_close(project_archive); \
+                    fprintf(stderr, "Encountered LibZip error: %s\n", zip_error_strerror(&zip_error)); \
                     return false; \
                 }
 
@@ -132,10 +136,8 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
 
             zip_stat_t archived_file_stat;
             zip_file_t* archived_file;
-            char file_buf[255];
-            char project_filename[FILENAME_MAX];
-            FILE* project_file;
             zip_int64_t bytes_read;
+            unsigned long file_crc;
 
             for (long i = 0; i < entries; i++) {
                 archived_file = zip_fopen_index(project_archive, (zip_uint64_t)i, 0);
@@ -146,19 +148,34 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
 
                 cwk_path_join(
                     project_dir, archived_file_stat.name,
-                    project_filename, sizeof(project_filename)
+                    temp_buffer, sizeof(temp_buffer)
                 );
-                project_file = fopen(project_filename, "wb");
-
-                printf("Archived File Name:     '%s'\n", archived_file_stat.name);
-                printf("Archived File CRC32:    %u\n", archived_file_stat.crc);
-
-                while ((bytes_read = zip_fread(archived_file, file_buf, sizeof(file_buf))) != 0) {
-                    __SCRATCH_ZIP_HANDLE_ERROR(bytes_read == -1)
-                    fwrite(file_buf, sizeof(*file_buf), (size_t)bytes_read, project_file);
+                temp_file = fopen(temp_buffer, "wb");
+                if (!temp_file) {
+                    fprintf(stderr, "Could not open file: '%s'\n", temp_buffer);
+                    return false;
                 }
 
-                fclose(project_file);
+                file_crc = crc32(0, Z_NULL, 0);
+
+                while ((bytes_read = zip_fread(archived_file, temp_buffer, sizeof(temp_buffer))) != 0) {
+                    __SCRATCH_ZIP_HANDLE_ERROR(bytes_read == -1)
+
+                    fwrite(temp_buffer, sizeof(*temp_buffer), (size_t)bytes_read, temp_file);
+                    file_crc = crc32(file_crc, (const Bytef*)temp_buffer, (uInt)bytes_read);
+                }
+
+                if (
+                    archived_file_stat.valid & ZIP_STAT_CRC &&
+                    archived_file_stat.crc != file_crc
+                ) {
+                    fprintf(stderr, "Could not validate file checksum: %zu != %u for '%s'\n", file_crc, archived_file_stat.crc, archived_file_stat.name);
+                    return false;
+                }
+
+                printf("Successfully extracted file: '%s'\n", archived_file_stat.name);
+
+                fclose(temp_file);
                 zip_fclose(archived_file);
             }
 
@@ -166,8 +183,6 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
         }
     }
 
-    printf("Project Hash:   '%s'\n", project_hash_str);
-
-    if (identifier) *identifier = project_hash;
+    fclose(fopen(project_lock, "wb"));
     return true;
 }

@@ -1,7 +1,6 @@
 include(CPM)
 
-find_package(OpenSSL)
-
+find_package(OpenSSL 3.6.0)
 if (NOT OpenSSL_FOUND)
     if (ANDROID)
         set(OpenSSL_CROSS "CROSS ON")
