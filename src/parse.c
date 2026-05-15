@@ -2,6 +2,7 @@
 #include <openssl/evp.h>
 #include <scratch/parse.h>
 #include <cwalk.h>
+#include <stdint.h>
 #include <zip.h>
 #include <zlib.h>
 
@@ -38,86 +39,106 @@
 bool scratch_project_load(const char* file_path, size_t* identifier) {
     char temp_buffer[1 << 16];
     FILE* temp_file;
+    size_t temp_counter;
 
     {
-        const char* extension;
-        size_t length = 0;
-        cwk_path_get_extension(file_path, &extension, &length);
+        #define extension_buffer temp_buffer
+        #define buffer_length temp_counter
 
-        if (strncmp(extension, ".sb3", length) != 0) {
+        cwk_path_get_extension(file_path, (const char**)&extension_buffer, &buffer_length);
+
+        if (strncmp((const char*)extension_buffer, ".sb3", buffer_length) != 0) {
             fprintf(stderr, "Path is not a valid .sb3 file: '%s'", file_path);
             return false;
         }
+
+        #undef extension_buffer
+        #undef buffer_length
     }
 
     char project_hash_str[FILENAME_MAX];
     {
+        #define bytes_read temp_counter
+        #define i temp_counter
+        #define file_buffer temp_buffer
+        #define hash_buffer temp_buffer
+        #define project_file temp_file
+
         EVP_MD_CTX* ctx;
         const EVP_MD* sha256;
         unsigned int hash_length;
-        size_t bytes_read;
 
         ctx = EVP_MD_CTX_new();
         sha256 = EVP_sha1();
         EVP_DigestInit_ex(ctx, sha256, NULL);
 
-        temp_file = fopen(file_path, "rb");
-        if (!temp_file) {
+        project_file = fopen(file_path, "rb");
+        if (!project_file) {
             fprintf(stderr, "Cannot open file: '%s'", file_path);
             return false;
         }
-
-        while ((bytes_read = fread(temp_buffer, sizeof(*temp_buffer), sizeof(temp_buffer), temp_file)) != 0) {
-            EVP_DigestUpdate(ctx, temp_buffer, bytes_read);
+        while ((bytes_read = fread(file_buffer, sizeof(*file_buffer), sizeof(file_buffer), project_file)) != 0) {
+            // TODO - check if fread caused an error before exiting
+            EVP_DigestUpdate(ctx, file_buffer, bytes_read);
         }
-        EVP_DigestFinal_ex(ctx, (unsigned char*)temp_buffer, &hash_length);
+        EVP_DigestFinal_ex(ctx, (unsigned char*)hash_buffer, &hash_length);
 
-        memcpy(identifier, temp_buffer, sizeof(*identifier));
-        for (size_t i = 0; i < sizeof(*identifier); i++) {
-            sprintf(project_hash_str + (i * 2), "%02x", (unsigned char)temp_buffer[i]);
+        memcpy(identifier, hash_buffer, sizeof(*identifier));
+        for (i = 0; i < sizeof(*identifier); i++) {
+            sprintf(project_hash_str + (i * 2), "%02x", (unsigned char)hash_buffer[i]);
         }
 
         EVP_MD_free((EVP_MD*)sha256);
         EVP_MD_CTX_free(ctx);
 
-        fclose(temp_file);
+        fclose(project_file);
+        
+        #undef bytes_read
+        #undef i
+        #undef file_buffer
+        #undef hash_buffer
+        #undef project_file
     }
     printf("[DEBUG] project_hash_str = '%s'\n", project_hash_str);
 
     char project_dir[FILENAME_MAX];
     char project_lock[FILENAME_MAX];
     {
-        cwk_path_join(
-            __scratch_homedir(), ".scratch",
-            temp_buffer, sizeof(temp_buffer)
-        );
-        if (!__scratch_exists(temp_buffer) || !__scratch_isdir(temp_buffer)) {
-            __scratch_mkdir(temp_buffer);
-        }
+        #define cache_dir temp_buffer
 
         cwk_path_join(
-            temp_buffer, project_hash_str,
+            __scratch_homedir(), ".scratch",
+            cache_dir, sizeof(cache_dir)
+        );
+        cwk_path_join(
+            cache_dir, project_hash_str,
             project_dir, sizeof(project_dir)
         );
-        if (!__scratch_exists(project_dir) || !__scratch_isdir(project_dir)) {
-            __scratch_mkdir(project_dir);
-        }
+        __scratch_mkdir(cache_dir);
+        __scratch_mkdir(project_dir);
 
         cwk_path_join(
             project_dir, "success.lock",
             project_lock, sizeof(project_lock)
         );
+
+        #undef cache_dir
     }
     printf("[DEBUG] project_dir = '%s'\n", project_dir);
     printf("[DEBUG] project_lock = '%s'\n", project_lock);
 
     {
+        #define i temp_counter
+        #define extracted_file_name temp_buffer
+        #define extracted_file temp_file
+        #define extracted_file_buffer temp_buffer
+
         if (!__scratch_exists(project_lock)) {
             printf("Project not cached!\n");
 
             zip_t* project_archive;
             int err_code;
-            long entries;
+            size_t entries;
             zip_error_t zip_error;
 
             #define __SCRATCH_ZIP_HANDLE_ERROR(condition) \
@@ -131,38 +152,38 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
             project_archive = zip_open(file_path, ZIP_RDONLY, &err_code);
             __SCRATCH_ZIP_HANDLE_ERROR(err_code != 0);
 
-            entries = zip_get_num_entries(project_archive, 0);
+            entries = (size_t)zip_get_num_entries(project_archive, 0);
             __SCRATCH_ZIP_HANDLE_ERROR(entries < 0);
 
             zip_stat_t archived_file_stat;
             zip_file_t* archived_file;
-            zip_int64_t bytes_read;
             unsigned long file_crc;
+            zip_int64_t bytes_read;
 
-            for (long i = 0; i < entries; i++) {
-                archived_file = zip_fopen_index(project_archive, (zip_uint64_t)i, 0);
+            for (i = 0; i < entries; i++) {
+                archived_file = zip_fopen_index(project_archive, i, 0);
                 __SCRATCH_ZIP_HANDLE_ERROR(!archived_file)
 
-                err_code = zip_stat_index(project_archive, (zip_uint64_t)i, 0, &archived_file_stat);
+                err_code = zip_stat_index(project_archive, i, 0, &archived_file_stat);
                 __SCRATCH_ZIP_HANDLE_ERROR(err_code != 0)
 
                 cwk_path_join(
                     project_dir, archived_file_stat.name,
-                    temp_buffer, sizeof(temp_buffer)
+                    extracted_file_name, sizeof(extracted_file_name)
                 );
-                temp_file = fopen(temp_buffer, "wb");
-                if (!temp_file) {
-                    fprintf(stderr, "Could not open file: '%s'\n", temp_buffer);
+                extracted_file = fopen(extracted_file_name, "wb");
+                if (!extracted_file) {
+                    fprintf(stderr, "Could not open file: '%s'\n", extracted_file_name);
                     return false;
                 }
 
                 file_crc = crc32(0, Z_NULL, 0);
 
-                while ((bytes_read = zip_fread(archived_file, temp_buffer, sizeof(temp_buffer))) != 0) {
+                while ((bytes_read = zip_fread(archived_file, extracted_file_buffer, sizeof(extracted_file_buffer))) != 0) {
                     __SCRATCH_ZIP_HANDLE_ERROR(bytes_read == -1)
 
-                    fwrite(temp_buffer, sizeof(*temp_buffer), (size_t)bytes_read, temp_file);
-                    file_crc = crc32(file_crc, (const Bytef*)temp_buffer, (uInt)bytes_read);
+                    fwrite(extracted_file_buffer, sizeof(*extracted_file_buffer), (size_t)bytes_read, extracted_file);
+                    file_crc = crc32(file_crc, (const Bytef*)extracted_file_buffer, (uInt)bytes_read);
                 }
 
                 if (
@@ -175,12 +196,17 @@ bool scratch_project_load(const char* file_path, size_t* identifier) {
 
                 printf("Successfully extracted file: '%s'\n", archived_file_stat.name);
 
-                fclose(temp_file);
+                fclose(extracted_file);
                 zip_fclose(archived_file);
             }
 
             zip_close(project_archive);
         }
+
+        #undef i
+        #undef extracted_file_name
+        #undef extracted_file
+        #undef extracted_file_buffer
     }
 
     fclose(fopen(project_lock, "wb"));
